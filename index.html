@@ -1,588 +1,716 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { 
-  Upload, FileText, Moon, Download, RefreshCw, X, 
-  Image as ImageIcon, Settings, CheckCircle, AlertCircle, 
-  Loader2, Grid, Layers, Trash2, LayoutTemplate, 
-  Menu, CheckSquare, Square, ChevronDown, ChevronUp
-} from 'lucide-react';
-
-// --- Configuration ---
-const APP_NAME = "SynapseLearn";
-const PDFJS_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
-const PDFJS_WORKER_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-const JSPDF_URL = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
-
-// --- Hooks ---
-const useScript = (url) => {
-  const [status, setStatus] = useState(url ? "loading" : "idle");
-  useEffect(() => {
-    if (!url) { setStatus("idle"); return; }
-    let script = document.querySelector(`script[src="${url}"]`);
-    if (!script) {
-      script = document.createElement("script");
-      script.src = url;
-      script.async = true;
-      script.setAttribute("data-status", "loading");
-      document.body.appendChild(script);
-      const setAttributeFromEvent = (event) => {
-        script.setAttribute("data-status", event.type === "load" ? "ready" : "error");
-        setStatus(event.type === "load" ? "ready" : "error");
-      };
-      script.addEventListener("load", setAttributeFromEvent);
-      script.addEventListener("error", setAttributeFromEvent);
-    } else {
-      setStatus(script.getAttribute("data-status"));
-    }
-    const setStateFromEvent = (event) => setStatus(event.type === "load" ? "ready" : "error");
-    script.addEventListener("load", setStateFromEvent);
-    script.addEventListener("error", setStateFromEvent);
-    return () => {
-      if (script) {
-        script.removeEventListener("load", setStateFromEvent);
-        script.removeEventListener("error", setStateFromEvent);
-      }
-    };
-  }, [url]);
-  return status;
-};
-
-export default function SynapseLearnMobile() {
-  const pdfJsStatus = useScript(PDFJS_URL);
-  const jsPdfStatus = useScript(JSPDF_URL);
-  const [isEngineReady, setIsEngineReady] = useState(false);
-
-  // --- State ---
-  const [files, setFiles] = useState([]);
-  const [pages, setPages] = useState([]); 
-  const [viewMode, setViewMode] = useState('single'); // 'single' | 'grid'
-  const [currentPreviewIndex, setCurrentPreviewIndex] = useState(0);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [processingProgress, setProcessingProgress] = useState(0);
-  const [logs, setLogs] = useState([]);
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  
-  // --- Settings ---
-  const [settings, setSettings] = useState({
-    invert: true,
-    grayscale: false,
-    brightness: 0,
-    contrast: 0,
-    removeBackground: false,
-    threshold: 200,
-    layoutConfig: 1, // 1, 2, 3, 4, 6, 9
-  });
-
-  const addLog = (msg, type = 'info') => {
-    setLogs(prev => [`[${new Date().toLocaleTimeString()}] ${msg}`, ...prev]);
-    if (type === 'error') console.error(msg);
-  };
-
-  // --- Init ---
-  useEffect(() => {
-    if (pdfJsStatus === "ready" && jsPdfStatus === "ready" && window.pdfjsLib) {
-      window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
-      setIsEngineReady(true);
-    }
-  }, [pdfJsStatus, jsPdfStatus]);
-
-  // --- Core Logic ---
-  const handleFiles = async (newFiles) => {
-    if (!newFiles || newFiles.length === 0) return;
-    setIsProcessing(true);
-    setMobileMenuOpen(false); // Close menu on mobile after select
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SynapseLearn Mobile</title>
     
-    const fileArray = Array.from(newFiles).filter(f => f.type === "application/pdf");
-    if (fileArray.length === 0) {
-        addLog("Invalid file type. Please upload PDFs.", "error");
-        setIsProcessing(false);
-        return;
-    }
-
-    const updatedFiles = [...files, ...fileArray];
-    setFiles(updatedFiles);
-
-    let newPagesList = [...pages];
-    let startingGlobalIndex = pages.length;
-
-    for (const file of fileArray) {
-        try {
-            const arrayBuffer = await file.arrayBuffer();
-            const pdfDoc = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-            
-            for (let i = 1; i <= pdfDoc.numPages; i++) {
-                newPagesList.push({
-                    globalId: `f${updatedFiles.indexOf(file)}-p${i}-${Date.now()}-${Math.random()}`,
-                    fileIndex: updatedFiles.indexOf(file),
-                    fileName: file.name,
-                    pdfDoc: pdfDoc,
-                    pageIndex: i,
-                    selected: true,
-                    thumbnail: null
-                });
-            }
-        } catch (err) {
-            addLog(`Error loading ${file.name}`, "error");
-        }
-    }
-
-    setPages(newPagesList);
-    setIsProcessing(false);
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
     
-    // Generate thumbnails for a few initial pages
-    generateThumbnails(newPagesList.slice(startingGlobalIndex, startingGlobalIndex + 6));
-  };
-
-  const generateThumbnails = async (targetPages) => {
-      const { invert, grayscale, contrast, brightness } = settings;
-      
-      for (const p of targetPages) {
-          if (p.thumbnail) continue; 
-          try {
-              const page = await p.pdfDoc.getPage(p.pageIndex);
-              // Use slightly higher scale for better visibility
-              const viewport = page.getViewport({ scale: 0.4 }); 
-              const canvas = document.createElement("canvas");
-              const ctx = canvas.getContext("2d");
-              canvas.height = viewport.height;
-              canvas.width = viewport.width;
-
-              // CRITICAL: Draw white background first so transparent PDFs aren't invisible
-              ctx.fillStyle = "#FFFFFF";
-              ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-              await page.render({ canvasContext: ctx, viewport }).promise;
-              
-              // Apply simple preview filter if needed (optional for thumbnails, keeps them fast)
-              // We'll skip complex filters on thumbnails for performance, but simple invert helps visual context
-              if (invert) {
-                  ctx.globalCompositeOperation = 'difference';
-                  ctx.fillStyle = 'white';
-                  ctx.fillRect(0, 0, canvas.width, canvas.height);
-              }
-
-              const thumbUrl = canvas.toDataURL();
-              setPages(prev => prev.map(item => item.globalId === p.globalId ? { ...item, thumbnail: thumbUrl } : item));
-          } catch(e) { console.warn("Thumb error", e); }
-      }
-  };
-
-  // Re-generate thumbnails if invert changes (for better UX)
-  useEffect(() => {
-     // Reset thumbnails so they regenerate with new visual style
-     setPages(prev => prev.map(p => ({...p, thumbnail: null})));
-     // Trigger regeneration for visible range (simplified here to first 20)
-     const timer = setTimeout(() => {
-        generateThumbnails(pages.slice(0, 20));
-     }, 500);
-     return () => clearTimeout(timer);
-  }, [settings.invert]);
-
-
-  const applyFilters = (imageData, config) => {
-    const data = new Uint8ClampedArray(imageData.data); 
-    const { invert, grayscale, brightness, contrast, removeBackground, threshold } = config;
-    const contrastFactor = (259 * (contrast + 255)) / (255 * (259 - contrast));
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     
-    for (let i = 0; i < data.length; i += 4) {
-      let r = data[i], g = data[i + 1], b = data[i + 2];
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-      if (invert) { r = 255 - r; g = 255 - g; b = 255 - b; }
-      if (grayscale) { const avg = 0.3 * r + 0.59 * g + 0.11 * b; r = avg; g = avg; b = avg; }
-      if (contrast !== 0) {
-        r = contrastFactor * (r - 128) + 128;
-        g = contrastFactor * (g - 128) + 128;
-        b = contrastFactor * (b - 128) + 128;
-      }
-      if (brightness !== 0) { r += brightness; g += brightness; b += brightness; }
-      if (removeBackground) {
-         if (r > threshold && g > threshold && b > threshold) { r = 255; g = 255; b = 255; }
-      }
-      data[i] = Math.max(0, Math.min(255, r));
-      data[i+1] = Math.max(0, Math.min(255, g));
-      data[i+2] = Math.max(0, Math.min(255, b));
-    }
-    return new ImageData(data, imageData.width, imageData.height);
-  };
-
-  const [activePreviewUrl, setActivePreviewUrl] = useState(null);
-  
-  // Single Preview Renderer
-  useEffect(() => {
-    const renderPreview = async () => {
-        if (pages.length === 0) return;
-        const currentPage = pages[currentPreviewIndex];
-        if (!currentPage) return;
-        try {
-            const page = await currentPage.pdfDoc.getPage(currentPage.pageIndex);
-            const viewport = page.getViewport({ scale: 1.0 });
-            const canvas = document.createElement("canvas");
-            const ctx = canvas.getContext("2d");
-            canvas.width = viewport.width;
-            canvas.height = viewport.height;
-            
-            // White bg
-            ctx.fillStyle = "#FFFFFF";
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-            await page.render({ canvasContext: ctx, viewport }).promise;
-            
-            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            const processed = applyFilters(imageData, settings);
-            ctx.putImageData(processed, 0, 0);
-            setActivePreviewUrl(canvas.toDataURL("image/jpeg", 0.9));
-        } catch (e) {}
-    };
-    renderPreview();
-  }, [currentPreviewIndex, pages.length, settings]);
-
-  // --- PDF Export Engine ---
-  const processAndDownload = async () => {
-    setIsProcessing(true);
-    setProcessingProgress(0);
-    const activePages = pages.filter(p => p.selected);
-    
-    if (activePages.length === 0) {
-        addLog("No slides selected!", "error");
-        setIsProcessing(false);
-        return;
-    }
-
-    try {
-        const { jsPDF } = window.jspdf;
-        const doc = new jsPDF('p', 'pt', 'a4'); 
-        const docW = doc.internal.pageSize.getWidth();
-        const docH = doc.internal.pageSize.getHeight();
+    <style>
+        /* Custom Scrollbar Styles */
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #374151; border-radius: 10px; border: 2px solid #111827; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #4b5563; }
         
-        // --- Grid Logic ---
-        // Defines how many rows and cols for each setting
-        const layoutMap = {
-            1: { cols: 1, rows: 1 },
-            2: { cols: 1, rows: 2 },
-            3: { cols: 1, rows: 3 },
-            4: { cols: 2, rows: 2 },
-            6: { cols: 2, rows: 3 },
-            9: { cols: 3, rows: 3 },
+        body { background-color: #111827; }
+        .a4-ratio { aspect-ratio: 1 / 1.414; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useCallback, useRef, useMemo } = React;
+
+        // --- ICON COMPONENTS ---
+        const Icon = ({ children, size = 24, className = "", onClick }) => (
+            <svg onClick={onClick} xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                {children}
+            </svg>
+        );
+        const Upload = (p) => <Icon {...p}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></Icon>;
+        const FileText = (p) => <Icon {...p}><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></Icon>;
+        const Moon = (p) => <Icon {...p}><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></Icon>;
+        const Download = (p) => <Icon {...p}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></Icon>;
+        const RefreshCw = (p) => <Icon {...p}><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></Icon>;
+        const X = (p) => <Icon {...p}><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></Icon>;
+        const ImageIcon = (p) => <Icon {...p}><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></Icon>;
+        const Settings = (p) => <Icon {...p}><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></Icon>;
+        const CheckCircle = (p) => <Icon {...p}><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></Icon>;
+        const Loader2 = (p) => <Icon {...p} className={`animate-spin ${p.className || ''}`}><path d="M21 12a9 9 0 1 1-6.21-8.85"/></Icon>;
+        const Grid = (p) => <Icon {...p}><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></Icon>;
+        const Layers = (p) => <Icon {...p}><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></Icon>;
+        const Trash2 = (p) => <Icon {...p}><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2-2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></Icon>;
+        const LayoutTemplate = (p) => <Icon {...p}><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></Icon>;
+        const Menu = (p) => <Icon {...p}><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></Icon>;
+        const CheckSquare = (p) => <Icon {...p}><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></Icon>;
+        const Square = (p) => <Icon {...p}><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/></Icon>;
+        const ChevronDown = (p) => <Icon {...p}><polyline points="6 9 12 15 18 9"/></Icon>;
+        const AlertCircle = (p) => <Icon {...p}><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></Icon>;
+        const ArrowUp = (p) => <Icon {...p}><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></Icon>;
+        const ArrowDown = (p) => <Icon {...p}><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></Icon>;
+        const FileIcon = (p) => <Icon {...p}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></Icon>;
+        const PenTool = (p) => <Icon {...p}><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/><path d="M2 2l7.586 7.586"/><circle cx="11" cy="11" r="2"/></Icon>;
+
+
+        // --- CONFIG & CONSTANTS ---
+        const APP_NAME = "SynapseLearn";
+        const PDFJS_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+        const PDFJS_WORKER_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+        const JSPDF_URL = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
+
+        // --- HOOKS ---
+        const useScript = (url) => {
+            const [status, setStatus] = useState(url ? "loading" : "idle");
+            useEffect(() => {
+                if (!url) { setStatus("idle"); return; }
+                let script = document.querySelector(`script[src="${url}"]`);
+                if (!script) {
+                    script = document.createElement("script");
+                    script.src = url;
+                    script.async = true;
+                    script.setAttribute("data-status", "loading");
+                    document.body.appendChild(script);
+                    const setAttributeFromEvent = (event) => {
+                        script.setAttribute("data-status", event.type === "load" ? "ready" : "error");
+                        setStatus(event.type === "load" ? "ready" : "error");
+                    };
+                    script.addEventListener("load", setAttributeFromEvent);
+                    script.addEventListener("error", setAttributeFromEvent);
+                } else {
+                    setStatus(script.getAttribute("data-status"));
+                }
+                const setStateFromEvent = (event) => setStatus(event.type === "load" ? "ready" : "error");
+                script.addEventListener("load", setStateFromEvent);
+                script.addEventListener("error", setStateFromEvent);
+                return () => {
+                    if (script) {
+                        script.removeEventListener("load", setStateFromEvent);
+                        script.removeEventListener("error", setStateFromEvent);
+                    }
+                };
+            }, [url]);
+            return status;
         };
-        const layout = layoutMap[settings.layoutConfig] || layoutMap[1];
-        const slidesPerPage = layout.cols * layout.rows;
-        
-        // Calculate cell dimensions (maximize space, no margins between cells if possible)
-        const cellW = docW / layout.cols;
-        const cellH = docH / layout.rows;
 
-        for (let i = 0; i < activePages.length; i++) {
-            const p = activePages[i];
-            setProcessingProgress(Math.round((i / activePages.length) * 100));
+        // --- OPTIMIZED IMAGE PROCESSOR ---
+        // This function draws an image to a context with filters applied.
+        // It uses fast GPU filters for standard ops, and falls back to CPU for background removal.
+        const drawProcessedImage = (ctx, imageSource, x, y, w, h, config) => {
+            const { invert, grayscale, brightness, contrast, removeBackground, threshold } = config;
+
+            // Save context state
+            ctx.save();
+
+            if (!removeBackground) {
+                // FAST PATH: Use Native Canvas Filters (GPU Accelerated)
+                let filterStr = "";
+                if (invert) filterStr += "invert(100%) ";
+                if (grayscale) filterStr += "grayscale(100%) ";
+                if (brightness !== 0) filterStr += `brightness(${100 + brightness}%) `;
+                if (contrast !== 0) filterStr += `contrast(${100 + contrast}%) `;
+                
+                ctx.filter = filterStr.trim() || "none";
+                ctx.drawImage(imageSource, x, y, w, h);
+            } else {
+                // SLOW PATH: Manual Pixel Manipulation (CPU)
+                // 1. Draw raw image to a temp canvas to get data
+                const tmpCanvas = document.createElement('canvas');
+                tmpCanvas.width = w;
+                tmpCanvas.height = h;
+                const tmpCtx = tmpCanvas.getContext('2d');
+                tmpCtx.drawImage(imageSource, 0, 0, w, h);
+                
+                const imageData = tmpCtx.getImageData(0, 0, w, h);
+                const data = imageData.data;
+                
+                const safeContrast = Math.max(-100, Math.min(100, contrast));
+                const contrastFactor = (259 * (safeContrast + 255)) / (255 * (259 - safeContrast));
+
+                for (let i = 0; i < data.length; i += 4) {
+                    let r = data[i], g = data[i + 1], b = data[i + 2];
+
+                    if (invert) { r = 255 - r; g = 255 - g; b = 255 - b; }
+                    if (grayscale) { const avg = 0.3 * r + 0.59 * g + 0.11 * b; r = avg; g = avg; b = avg; }
+                    
+                    if (safeContrast !== 0) {
+                        r = contrastFactor * (r - 128) + 128;
+                        g = contrastFactor * (g - 128) + 128;
+                        b = contrastFactor * (b - 128) + 128;
+                    }
+                    if (brightness !== 0) { r += brightness; g += brightness; b += brightness; }
+                    
+                    // Background Removal Logic
+                    if (r > threshold && g > threshold && b > threshold) { 
+                        r = 255; g = 255; b = 255; 
+                    }
+
+                    data[i] = Math.max(0, Math.min(255, r));
+                    data[i+1] = Math.max(0, Math.min(255, g));
+                    data[i+2] = Math.max(0, Math.min(255, b));
+                }
+                
+                // Put processed data onto the target context
+                ctx.putImageData(imageData, x, y);
+            }
             
-            // New page check
-            if (i > 0 && i % slidesPerPage === 0) {
-                doc.addPage();
+            ctx.restore();
+        };
+
+
+        const generateUniqueId = () => Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+
+        // --- LAZY LOAD CARD COMPONENT ---
+        const PageCard = ({ page, settings, toggleSelect, onGenerateThumb }) => {
+            const cardRef = useRef(null);
+            const [isVisible, setIsVisible] = useState(false);
+
+            useEffect(() => {
+                const observer = new IntersectionObserver(([entry]) => {
+                    if (entry.isIntersecting) {
+                        setIsVisible(true);
+                        observer.disconnect();
+                    }
+                }, { rootMargin: '100px' });
+                
+                if (cardRef.current) observer.observe(cardRef.current);
+                return () => observer.disconnect();
+            }, []);
+
+            useEffect(() => {
+                // If visible and no thumbnail OR if settings changed (force regen needed?)
+                // Actually, for fast filters, we can regen quickly.
+                // But here we rely on the parent logic or just render raw.
+                // For simplicity, we trigger gen if thumbnail is missing.
+                if (isVisible && !page.thumbnail) {
+                    onGenerateThumb(page);
+                }
+            }, [isVisible, page.thumbnail]);
+
+            return (
+                <div 
+                    ref={cardRef}
+                    onClick={() => toggleSelect(page.globalId)} 
+                    className={`relative aspect-video rounded-lg border-2 cursor-pointer overflow-hidden group transition-all duration-200 ${page.selected ? "border-blue-500 bg-gray-800" : "border-gray-800 opacity-60 bg-gray-900 hover:opacity-100"}`}
+                >
+                    {page.thumbnail ? (
+                        <img src={page.thumbnail} className="w-full h-full object-contain p-1" alt={`Page ${page.pageIndex}`} />
+                    ) : (
+                        <div className="w-full h-full flex flex-col items-center justify-center text-[10px] text-gray-600 gap-2">
+                            <div className="w-6 h-6 border-2 border-gray-700 border-t-blue-500 rounded-full animate-spin"></div>
+                        </div>
+                    )}
+                    <div className={`absolute top-2 right-2 w-6 h-6 rounded-full flex items-center justify-center border shadow-sm z-10 transition-transform ${page.selected ? 'bg-blue-500 border-blue-500 text-white scale-100' : 'bg-gray-900/90 border-gray-500 text-transparent scale-90 group-hover:scale-100 group-hover:bg-gray-800'}`}>
+                        <CheckCircle size={14}/>
+                    </div>
+                    <div className="absolute bottom-1 right-1 text-[10px] bg-black/70 px-1.5 py-0.5 rounded text-gray-300 font-mono backdrop-blur-sm shadow">
+                        Pg {page.pageIndex}
+                    </div>
+                </div>
+            );
+        };
+
+        // --- MAIN APP COMPONENT ---
+        function SynapseLearnMobile() {
+            const pdfJsStatus = useScript(PDFJS_URL);
+            const jsPdfStatus = useScript(JSPDF_URL);
+            const [isEngineReady, setIsEngineReady] = useState(false);
+            
+            const [files, setFiles] = useState([]);
+            const [pages, setPages] = useState([]); 
+            
+            const [viewMode, setViewMode] = useState('single');
+            const [currentSheetIndex, setCurrentSheetIndex] = useState(0);
+            const [outputFileName, setOutputFileName] = useState("SynapseNotes");
+            
+            const [isProcessing, setIsProcessing] = useState(false);
+            const [processingProgress, setProcessingProgress] = useState(0);
+            const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+            const [errorMsg, setErrorMsg] = useState(null);
+            const [settings, setSettings] = useState({
+                invert: true, grayscale: false, brightness: 0, contrast: 0,
+                removeBackground: false, threshold: 200, layoutConfig: 1
+            });
+
+            useEffect(() => {
+                if (pdfJsStatus === "ready" && jsPdfStatus === "ready" && window.pdfjsLib) {
+                    window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
+                    setIsEngineReady(true);
+                }
+            }, [pdfJsStatus, jsPdfStatus]);
+
+            // --- SINGLE THUMBNAIL GENERATOR (Using Optimized Draw) ---
+            const generateSingleThumbnail = useCallback(async (pageData) => {
+                try {
+                    const page = await pageData.pdfDoc.getPage(pageData.pageIndex);
+                    const viewport = page.getViewport({ scale: 0.25 }); // Low res
+                    
+                    // Offscreen canvas for raw PDF render
+                    const rawCanvas = document.createElement("canvas");
+                    rawCanvas.width = viewport.width;
+                    rawCanvas.height = viewport.height;
+                    const rawCtx = rawCanvas.getContext("2d");
+                    await page.render({ canvasContext: rawCtx, viewport }).promise;
+
+                    // Target canvas for filtered output
+                    const targetCanvas = document.createElement("canvas");
+                    targetCanvas.width = viewport.width;
+                    targetCanvas.height = viewport.height;
+                    const targetCtx = targetCanvas.getContext("2d");
+                    
+                    // Fill background
+                    targetCtx.fillStyle = "#FFFFFF";
+                    targetCtx.fillRect(0, 0, targetCanvas.width, targetCanvas.height);
+
+                    // Apply filters/processing
+                    drawProcessedImage(targetCtx, rawCanvas, 0, 0, viewport.width, viewport.height, settings);
+                    
+                    const thumbUrl = targetCanvas.toDataURL();
+                    
+                    setPages(prev => prev.map(p => 
+                        p.globalId === pageData.globalId ? { ...p, thumbnail: thumbUrl } : p
+                    ));
+                } catch (e) {
+                    console.warn("Thumbnail Gen Error:", e);
+                }
+            }, [settings]); // Re-create when settings change
+
+            const handleFiles = async (newFileList) => {
+                if (!newFileList || newFileList.length === 0) return;
+                setIsProcessing(true);
+                setErrorMsg(null);
+                setMobileMenuOpen(false);
+
+                const fileArray = Array.from(newFileList).filter(f => f.type === "application/pdf");
+                if (fileArray.length === 0) {
+                    setErrorMsg("Please select PDF files only.");
+                    setIsProcessing(false);
+                    return;
+                }
+
+                const processedNewFiles = fileArray.map(f => ({
+                    id: generateUniqueId(),
+                    name: f.name,
+                    fileObject: f
+                }));
+
+                const updatedFiles = [...files, ...processedNewFiles];
+                setFiles(updatedFiles);
+
+                let newPagesList = [...pages];
+                
+                for (const fileData of processedNewFiles) {
+                    try {
+                        const arrayBuffer = await fileData.fileObject.arrayBuffer();
+                        const pdfDoc = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+                        for (let i = 1; i <= pdfDoc.numPages; i++) {
+                            newPagesList.push({
+                                globalId: `${fileData.id}-p${i}`,
+                                fileId: fileData.id,
+                                fileName: fileData.name,
+                                pdfDoc: pdfDoc,
+                                pageIndex: i,
+                                selected: true,
+                                thumbnail: null
+                            });
+                        }
+                    } catch (err) {
+                        console.error(err);
+                        setErrorMsg(`Failed to load ${fileData.name}`);
+                    }
+                }
+                setPages(newPagesList);
+                setIsProcessing(false);
+            };
+
+            // Clear thumbs on settings change to force regen with new filters
+            useEffect(() => {
+                if (pages.length > 0) {
+                    setPages(prev => prev.map(p => ({...p, thumbnail: null})));
+                }
+            }, [settings.invert, settings.grayscale, settings.brightness, settings.contrast, settings.removeBackground]);
+
+            const deleteFile = (fileId) => {
+                setFiles(prev => prev.filter(f => f.id !== fileId));
+                setPages(prev => prev.filter(p => p.fileId !== fileId));
+            };
+
+            const moveFile = (index, direction) => {
+                if ((direction === -1 && index === 0) || (direction === 1 && index === files.length - 1)) return;
+                const newFiles = [...files];
+                const temp = newFiles[index];
+                newFiles[index] = newFiles[index + direction];
+                newFiles[index + direction] = temp;
+                setFiles(newFiles);
+
+                // Reorder pages based on new file order
+                const newFileOrderIds = newFiles.map(f => f.id);
+                setPages(prevPages => {
+                    const groupedPages = prevPages.reduce((acc, p) => {
+                        if (!acc[p.fileId]) acc[p.fileId] = [];
+                        acc[p.fileId].push(p);
+                        return acc;
+                    }, {});
+                    return newFileOrderIds.flatMap(id => groupedPages[id] || []);
+                });
+            };
+
+            // --- LAYOUT-AWARE PREVIEW RENDERER ---
+            const [activePreviewUrl, setActivePreviewUrl] = useState(null);
+            
+            const selectedPages = useMemo(() => pages.filter(p => p.selected), [pages]);
+            const layoutMap = {
+                1: { cols: 1, rows: 1 }, 2: { cols: 1, rows: 2 }, 3: { cols: 1, rows: 3 },
+                4: { cols: 2, rows: 2 }, 6: { cols: 2, rows: 3 }, 9: { cols: 3, rows: 3 },
+            };
+            const currentLayout = layoutMap[settings.layoutConfig];
+            const slidesPerPage = currentLayout.cols * currentLayout.rows;
+            const totalSheets = Math.ceil(selectedPages.length / slidesPerPage) || 1;
+
+            // Effect to render the current "Sheet"
+            useEffect(() => {
+                const renderSheet = async () => {
+                    if (pages.length === 0) return;
+                    
+                    const canvas = document.createElement("canvas");
+                    const A4_W = 595; 
+                    const A4_H = 842; 
+                    const SCALE = 1.0; // Moderate quality for preview to stay responsive
+                    
+                    canvas.width = A4_W * SCALE;
+                    canvas.height = A4_H * SCALE;
+                    
+                    const ctx = canvas.getContext("2d");
+                    ctx.fillStyle = "#FFFFFF";
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                    const startIdx = currentSheetIndex * slidesPerPage;
+                    const sheetPages = selectedPages.slice(startIdx, startIdx + slidesPerPage);
+
+                    if (sheetPages.length === 0) {
+                        setActivePreviewUrl(null);
+                        return;
+                    }
+
+                    const cellW = canvas.width / currentLayout.cols;
+                    const cellH = canvas.height / currentLayout.rows;
+
+                    for (let i = 0; i < sheetPages.length; i++) {
+                        const p = sheetPages[i];
+                        try {
+                            const page = await p.pdfDoc.getPage(p.pageIndex);
+                            const viewport = page.getViewport({ scale: 1.0 });
+                            
+                            // Render PDF to temp canvas
+                            const tmpCanvas = document.createElement("canvas");
+                            tmpCanvas.width = viewport.width;
+                            tmpCanvas.height = viewport.height;
+                            const tmpCtx = tmpCanvas.getContext("2d");
+                            await page.render({ canvasContext: tmpCtx, viewport }).promise;
+
+                            // Calculate position
+                            const col = i % currentLayout.cols;
+                            const row = Math.floor(i / currentLayout.cols);
+                            const xBase = col * cellW;
+                            const yBase = row * cellH;
+
+                            // Fit logic
+                            const ratio = Math.min(cellW / tmpCanvas.width, cellH / tmpCanvas.height) * 0.95;
+                            const finalW = tmpCanvas.width * ratio;
+                            const finalH = tmpCanvas.height * ratio;
+                            const xOffset = xBase + (cellW - finalW) / 2;
+                            const yOffset = yBase + (cellH - finalH) / 2;
+
+                            // Use Optimized Draw
+                            drawProcessedImage(ctx, tmpCanvas, xOffset, yOffset, finalW, finalH, settings);
+
+                        } catch (e) { console.error("Preview render error", e); }
+                    }
+
+                    setActivePreviewUrl(canvas.toDataURL("image/jpeg", 0.7));
+                };
+
+                const timeout = setTimeout(renderSheet, 200); // 200ms debounce
+                return () => clearTimeout(timeout);
+
+            }, [currentSheetIndex, selectedPages, settings, pages]);
+
+
+            // --- EXPORT LOGIC ---
+            const processAndDownload = async () => {
+                setIsProcessing(true);
+                setProcessingProgress(0);
+                
+                if (selectedPages.length === 0) {
+                    setErrorMsg("No slides selected for export.");
+                    setIsProcessing(false);
+                    return;
+                }
+                try {
+                    if (!window.jspdf) throw new Error("PDF Engine not loaded");
+                    const { jsPDF } = window.jspdf;
+                    const doc = new jsPDF('p', 'pt', 'a4');
+                    const docW = doc.internal.pageSize.getWidth();
+                    const docH = doc.internal.pageSize.getHeight();
+                    
+                    const cellW = docW / currentLayout.cols;
+                    const cellH = docH / currentLayout.rows;
+
+                    for (let i = 0; i < selectedPages.length; i++) {
+                        setProcessingProgress(Math.round((i / selectedPages.length) * 100));
+                        if (i > 0 && i % slidesPerPage === 0) doc.addPage();
+                        
+                        const p = selectedPages[i];
+                        const page = await p.pdfDoc.getPage(p.pageIndex);
+                        const viewport = page.getViewport({ scale: 1.5 }); // Higher quality for export
+                        
+                        // Raw PDF Render
+                        const rawCanvas = document.createElement("canvas");
+                        rawCanvas.width = viewport.width;
+                        rawCanvas.height = viewport.height;
+                        const rawCtx = rawCanvas.getContext("2d");
+                        await page.render({ canvasContext: rawCtx, viewport }).promise;
+
+                        // Target Canvas (Processed)
+                        const finalCanvas = document.createElement("canvas");
+                        finalCanvas.width = viewport.width;
+                        finalCanvas.height = viewport.height;
+                        const finalCtx = finalCanvas.getContext("2d");
+                        
+                        // Apply filters
+                        drawProcessedImage(finalCtx, rawCanvas, 0, 0, viewport.width, viewport.height, settings);
+                        
+                        const imgData = finalCanvas.toDataURL("image/jpeg", 0.85);
+                        
+                        // Geometry
+                        const indexOnPage = i % slidesPerPage;
+                        const col = indexOnPage % currentLayout.cols;
+                        const row = Math.floor(indexOnPage / currentLayout.cols);
+                        const xBase = col * cellW;
+                        const yBase = row * cellH;
+                        
+                        const ratio = Math.min(cellW / viewport.width, cellH / viewport.height) * 0.95;
+                        const finalW = viewport.width * ratio;
+                        const finalH = viewport.height * ratio;
+                        const xOffset = xBase + (cellW - finalW) / 2;
+                        const yOffset = yBase + (cellH - finalH) / 2;
+                        
+                        doc.addImage(imgData, 'JPEG', xOffset, yOffset, finalW, finalH);
+                        await new Promise(r => setTimeout(r, 0));
+                    }
+                    setProcessingProgress(100);
+                    const safeName = outputFileName.replace(/[^a-z0-9]/gi, '_').substring(0, 30) || "SynapseExport";
+                    doc.save(`${safeName}.pdf`);
+                } catch (err) { setErrorMsg("Export failed: " + err.message); } 
+                finally { setIsProcessing(false); }
+            };
+
+            const toggleSelect = (id) => setPages(p => p.map(x => x.globalId === id ? { ...x, selected: !x.selected } : x));
+            const selectAll = () => setPages(p => p.map(x => ({ ...x, selected: true })));
+            const selectNone = () => setPages(p => p.map(x => ({ ...x, selected: false })));
+
+            useEffect(() => {
+                if (currentSheetIndex >= totalSheets) {
+                    setCurrentSheetIndex(Math.max(0, totalSheets - 1));
+                }
+            }, [totalSheets, currentSheetIndex]);
+
+            if (!isEngineReady) {
+                return (
+                    <div className="flex h-screen w-full items-center justify-center bg-gray-950 text-white flex-col gap-4">
+                        <Loader2 size={40} className="text-blue-500" />
+                        <div className="text-center"><h2 className="font-bold text-xl">SynapseLearn</h2><p className="text-gray-500 text-sm">Initializing...</p></div>
+                    </div>
+                );
             }
 
-            // Render
-            const page = await p.pdfDoc.getPage(p.pageIndex);
-            const viewport = page.getViewport({ scale: 1.5 });
-            const canvas = document.createElement("canvas");
-            const ctx = canvas.getContext("2d");
-            canvas.width = viewport.width;
-            canvas.height = viewport.height;
-            
-            // White bg first
-            ctx.fillStyle = "#FFFFFF";
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-            
-            await page.render({ canvasContext: ctx, viewport }).promise;
-            
-            // Filter
-            const rawData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            const filtered = applyFilters(rawData, settings);
-            ctx.putImageData(filtered, 0, 0);
-            const imgData = canvas.toDataURL("image/jpeg", 0.85);
+            return (
+                <div className="flex flex-col lg:flex-row h-screen bg-gray-900 text-gray-100 font-sans overflow-hidden">
+                    {/* Header Mobile */}
+                    <div className="lg:hidden h-16 bg-gray-950 border-b border-gray-800 flex items-center justify-between px-4 shrink-0 z-30">
+                        <div className="flex items-center gap-2 font-bold text-lg text-white"><Layers className="text-blue-500" /> {APP_NAME}</div>
+                        <button onClick={() => setMobileMenuOpen(!mobileMenuOpen)} className="p-2 bg-gray-900 rounded border border-gray-700 text-gray-300"><Menu size={20} /></button>
+                    </div>
 
-            // Calculate Position
-            const indexOnPage = i % slidesPerPage;
-            const col = indexOnPage % layout.cols;
-            const row = Math.floor(indexOnPage / layout.cols);
-            
-            const xBase = col * cellW;
-            const yBase = row * cellH;
+                    {/* Sidebar */}
+                    <aside className={`fixed inset-0 z-40 bg-gray-950 flex flex-col transition-transform duration-300 lg:relative lg:translate-x-0 lg:w-80 lg:border-r lg:border-gray-800 lg:shadow-xl ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+                        <div className="lg:hidden p-4 flex justify-end border-b border-gray-800"><button onClick={() => setMobileMenuOpen(false)} className="text-gray-400"><X size={24} /></button></div>
+                        <div className="hidden lg:flex p-5 border-b border-gray-800 bg-gradient-to-r from-gray-950 to-gray-900 items-center gap-2"><Layers className="text-blue-500" /><h1 className="font-bold text-white">{APP_NAME}</h1></div>
+                        
+                        <div className="flex-1 overflow-y-auto p-5 space-y-8">
+                            <div>
+                                <h3 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-3 flex items-center gap-2"><FileText size={12} /> Source Files</h3>
+                                <div className="border-2 border-dashed border-gray-800 hover:border-blue-500 rounded-xl p-6 text-center cursor-pointer bg-gray-900/50 group relative">
+                                    <input type="file" id="pdf-input" multiple accept="application/pdf" className="absolute inset-0 opacity-0 cursor-pointer" onChange={(e) => handleFiles(e.target.files)} />
+                                    <Upload className="mx-auto text-blue-500 mb-2 group-hover:scale-110 transition-transform" />
+                                    <span className="text-sm font-medium text-gray-300">Upload PDFs</span>
+                                    <p className="text-[10px] text-gray-500 mt-1">Tap to select multiple files</p>
+                                </div>
+                                <div className="mt-4 space-y-2">
+                                    {files.map((f, i) => (
+                                        <div key={f.id} className="flex justify-between items-center text-xs bg-gray-900 p-2.5 rounded border border-gray-800 group">
+                                            <div className="flex items-center gap-2 overflow-hidden">
+                                                <div className="flex flex-col gap-0.5">
+                                                    <button onClick={() => moveFile(i, -1)} disabled={i === 0} className="text-gray-600 hover:text-blue-400 disabled:opacity-20"><ArrowUp size={10} /></button>
+                                                    <button onClick={() => moveFile(i, 1)} disabled={i === files.length - 1} className="text-gray-600 hover:text-blue-400 disabled:opacity-20"><ArrowDown size={10} /></button>
+                                                </div>
+                                                <span className="truncate w-36 text-gray-400">{f.name}</span>
+                                            </div>
+                                            <button onClick={() => deleteFile(f.id)} className="text-red-400 hover:text-red-300 p-1 opacity-60 group-hover:opacity-100"><Trash2 size={12}/></button>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                            <div className={files.length === 0 ? "opacity-50 pointer-events-none" : ""}>
+                                <div className="flex justify-between items-center mb-3">
+                                    <h3 className="text-xs font-bold text-gray-500 uppercase tracking-widest flex items-center gap-2"><Settings size={12}/> Processing</h3>
+                                    <button onClick={() => setSettings({invert: true, grayscale: false, brightness: 0, contrast: 0, removeBackground: false, threshold: 200, layoutConfig: 1})} title="Reset"><RefreshCw size={12} className="text-gray-600 hover:text-blue-400"/></button>
+                                </div>
+                                <div className="grid grid-cols-2 gap-3 mb-4">
+                                    <button onClick={() => setSettings(s => ({...s, invert: !s.invert}))} className={`p-3 rounded-lg border flex flex-col items-center gap-2 ${settings.invert ? 'bg-blue-600/20 border-blue-500 text-blue-300' : 'bg-gray-900 border-gray-800 text-gray-500'}`}><Moon size={18}/> <span className="text-[10px]">Invert</span></button>
+                                    <button onClick={() => setSettings(s => ({...s, grayscale: !s.grayscale}))} className={`p-3 rounded-lg border flex flex-col items-center gap-2 ${settings.grayscale ? 'bg-blue-600/20 border-blue-500 text-blue-300' : 'bg-gray-900 border-gray-800 text-gray-500'}`}><ImageIcon size={18}/> <span className="text-[10px]">Grayscale</span></button>
+                                </div>
+                                <div className="space-y-4">
+                                    <div><div className="flex justify-between text-[10px] text-gray-400 uppercase mb-1"><span>Contrast</span> <span>{settings.contrast}</span></div><input type="range" min="-100" max="100" value={settings.contrast} onChange={(e) => setSettings(s => ({...s, contrast: parseInt(e.target.value)}))} className="w-full h-1 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-blue-500"/></div>
+                                    <div><div className="flex justify-between text-[10px] text-gray-400 uppercase mb-1"><span>Brightness</span> <span>{settings.brightness}</span></div><input type="range" min="-100" max="100" value={settings.brightness} onChange={(e) => setSettings(s => ({...s, brightness: parseInt(e.target.value)}))} className="w-full h-1 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-blue-500"/></div>
+                                </div>
+                            </div>
+                            <div className={files.length === 0 ? "opacity-50 pointer-events-none" : ""}>
+                                <h3 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-3 flex items-center gap-2"><LayoutTemplate size={12}/> Grid Layout</h3>
+                                <div className="grid grid-cols-3 gap-2">
+                                    {[1, 2, 3, 4, 6, 9].map(n => (
+                                        <button key={n} onClick={() => setSettings(s => ({...s, layoutConfig: n}))} className={`py-2 text-xs font-bold rounded border ${settings.layoutConfig === n ? 'bg-blue-600 text-white border-blue-600' : 'bg-gray-900 border-gray-800 text-gray-400'}`}>{n}-Up</button>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                        <div className="p-5 border-t border-gray-800 bg-gray-950 space-y-4">
+                            <div className="space-y-1">
+                                <label className="text-[10px] font-bold text-gray-500 uppercase">Output Filename</label>
+                                <div className="flex items-center bg-gray-900 border border-gray-800 rounded-lg px-3 py-2 focus-within:border-blue-500">
+                                    <PenTool size={14} className="text-gray-500 mr-2"/>
+                                    <input type="text" value={outputFileName} onChange={(e) => setOutputFileName(e.target.value)} className="bg-transparent border-none outline-none text-xs text-white w-full placeholder-gray-600" placeholder="SynapseExport"/>
+                                    <span className="text-[10px] text-gray-600">.pdf</span>
+                                </div>
+                            </div>
+                            <button onClick={processAndDownload} disabled={files.length === 0 || isProcessing} className="w-full py-3.5 rounded-xl font-bold flex items-center justify-center gap-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white shadow-lg">
+                                {isProcessing ? <Loader2 className="animate-spin" size={20}/> : <Download size={20}/>} {isProcessing ? "Processing..." : "Export PDF"}
+                            </button>
+                        </div>
+                    </aside>
 
-            // Fit image into cell while maintaining aspect ratio
-            const ratioW = cellW / viewport.width;
-            const ratioH = cellH / viewport.height;
-            const ratio = Math.min(ratioW, ratioH);
-            
-            const finalW = viewport.width * ratio;
-            const finalH = viewport.height * ratio;
-            
-            // Center in cell
-            const xOffset = xBase + (cellW - finalW) / 2;
-            const yOffset = yBase + (cellH - finalH) / 2;
+                    {/* Main Area */}
+                    <main className="flex-1 flex flex-col relative bg-gray-900 min-w-0">
+                        <div className="h-14 bg-gray-900/90 backdrop-blur border-b border-gray-800 flex items-center justify-between px-4 shrink-0 z-20">
+                            <div className="flex bg-gray-950 p-1 rounded-lg border border-gray-800">
+                                <button onClick={() => setViewMode('single')} className={`px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-2 ${viewMode === 'single' ? 'bg-gray-800 text-white shadow' : 'text-gray-400'}`}><FileText size={14}/> <span className="hidden sm:inline">Preview</span></button>
+                                <button onClick={() => setViewMode('grid')} className={`px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-2 ${viewMode === 'grid' ? 'bg-gray-800 text-white shadow' : 'text-gray-400'}`}><Grid size={14}/> <span className="hidden sm:inline">Grid Manager</span></button>
+                            </div>
+                            <div className="text-xs text-gray-400 flex items-center gap-3">
+                                <span className="hidden sm:inline">{selectedPages.length} Slides</span>
+                                <div className="px-2 py-0.5 bg-blue-500/10 border border-blue-500/20 text-blue-300 rounded">Layout: {settings.layoutConfig}-Up</div>
+                            </div>
+                        </div>
 
-            doc.addImage(imgData, 'JPEG', xOffset, yOffset, finalW, finalH);
-            
-            // Pause for UI
-            await new Promise(r => setTimeout(r, 0));
+                        <div className="flex-1 overflow-hidden relative">
+                            {errorMsg && <div className="absolute top-4 right-4 z-50 bg-red-500/10 border border-red-500/50 text-red-200 px-4 py-3 rounded-lg flex items-center gap-3 shadow-lg backdrop-blur"><AlertCircle size={18}/><span className="text-sm">{errorMsg}</span><button onClick={() => setErrorMsg(null)}><X size={14}/></button></div>}
+
+                            {viewMode === 'single' && (
+                                <div className="w-full h-full bg-[radial-gradient(#1f2937_1px,transparent_1px)] [background-size:16px_16px] flex flex-col items-center p-4 overflow-y-auto">
+                                    {pages.length > 0 ? (
+                                        <>
+                                        <div className="relative shadow-2xl bg-white max-w-full lg:max-w-2xl w-full border-4 border-gray-800 rounded-sm">
+                                            {/* Preview Canvas */}
+                                            {activePreviewUrl ? (
+                                                <img src={activePreviewUrl} alt="Preview" className="w-full h-auto block" />
+                                            ) : (
+                                                <div className="aspect-[1/1.414] bg-gray-800 flex items-center justify-center text-gray-500 flex-col gap-2">
+                                                    <Loader2 className="animate-spin text-blue-500" />
+                                                    <span className="text-xs">Generating Sheet Preview...</span>
+                                                </div>
+                                            )}
+                                        </div>
+                                        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-gray-900/90 backdrop-blur border border-gray-700 rounded-full px-5 py-2.5 flex items-center gap-6 text-white shadow-xl z-20">
+                                            <button onClick={() => setCurrentSheetIndex(Math.max(0, currentSheetIndex - 1))} className="hover:text-blue-400 disabled:opacity-30" disabled={currentSheetIndex === 0}><ChevronDown className="rotate-90"/></button>
+                                            <span className="text-sm font-mono pt-0.5 min-w-[5rem] text-center">Sheet {currentSheetIndex + 1} / {totalSheets}</span>
+                                            <button onClick={() => setCurrentSheetIndex(Math.min(totalSheets - 1, currentSheetIndex + 1))} className="hover:text-blue-400 disabled:opacity-30" disabled={currentSheetIndex === totalSheets - 1}><ChevronDown className="-rotate-90"/></button>
+                                        </div>
+                                        </>
+                                    ) : (
+                                        <div className="flex flex-col items-center justify-center h-full text-gray-600"><FileText size={64} className="mb-4 opacity-20"/><p>No document loaded</p><button onClick={() => setMobileMenuOpen(true)} className="mt-6 text-blue-500 text-sm lg:hidden border border-blue-500/30 px-4 py-2 rounded-full">Open Menu</button></div>
+                                    )}
+                                </div>
+                            )}
+
+                            {viewMode === 'grid' && (
+                                <div className="w-full h-full flex flex-col bg-gray-900">
+                                    <div className="h-12 bg-gray-950 border-b border-gray-800 flex items-center px-4 gap-4 text-xs shrink-0">
+                                        <button onClick={selectAll} className="flex items-center gap-1.5 hover:text-white text-gray-400"><CheckSquare size={16} className="text-blue-500"/> Select All</button>
+                                        <div className="h-4 w-px bg-gray-800"></div>
+                                        <button onClick={selectNone} className="flex items-center gap-1.5 hover:text-white text-gray-400"><Square size={16}/> Select None</button>
+                                    </div>
+                                    <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
+                                        {pages.length === 0 ? <div className="flex items-center justify-center h-full text-gray-600">No slides</div> : (
+                                            <div className="space-y-8 pb-24">
+                                                {files.map(file => {
+                                                    const filePages = pages.filter(p => p.fileId === file.id);
+                                                    if (filePages.length === 0) return null;
+                                                    return (
+                                                        <div key={file.id} className="bg-gray-900/50 rounded-xl p-4 border border-gray-800/50">
+                                                            <div className="flex items-center gap-2 mb-4 text-sm font-bold text-gray-400 pb-2 border-b border-gray-800">
+                                                                <FileIcon size={16} className="text-blue-500"/>
+                                                                <span className="truncate">{file.name}</span>
+                                                                <span className="text-xs font-normal text-gray-600 ml-auto">{filePages.length} Slides</span>
+                                                            </div>
+                                                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                                                                {filePages.map(p => (
+                                                                    <PageCard 
+                                                                        key={p.globalId} 
+                                                                        page={p} 
+                                                                        settings={settings}
+                                                                        toggleSelect={toggleSelect}
+                                                                        onGenerateThumb={generateSingleThumbnail}
+                                                                    />
+                                                                ))}
+                                                            </div>
+                                                        </div>
+                                                    )
+                                                })}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+
+                            {isProcessing && (
+                                <div className="absolute inset-0 z-50 bg-gray-900/90 backdrop-blur flex items-center justify-center p-6">
+                                    <div className="w-full max-w-sm bg-gray-950 border border-gray-800 rounded-2xl p-8 text-center shadow-2xl">
+                                        <Loader2 className="w-12 h-12 text-blue-500 animate-spin mx-auto mb-6"/>
+                                        <h3 className="text-xl font-bold text-white mb-2">Generating PDF</h3>
+                                        <p className="text-sm text-gray-400 mb-6">Compressing & arranging slides...</p>
+                                        <div className="h-2.5 bg-gray-900 rounded-full overflow-hidden border border-gray-800"><div className="h-full bg-gradient-to-r from-blue-600 to-indigo-500" style={{width: `${processingProgress}%`}}></div></div>
+                                        <div className="flex justify-between mt-2 text-xs font-mono text-gray-500"><span>Progress</span><span className="text-blue-400">{processingProgress}%</span></div>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </main>
+                </div>
+            );
         }
 
-        setProcessingProgress(100);
-        doc.save(`${APP_NAME}_Export.pdf`);
-    } catch (err) {
-        addLog(`Export Error: ${err.message}`, "error");
-    } finally {
-        setIsProcessing(false);
-    }
-  };
-
-  const selectAll = () => setPages(p => p.map(x => ({...x, selected: true})));
-  const selectNone = () => setPages(p => p.map(x => ({...x, selected: false})));
-  const toggleSelect = (id) => setPages(p => p.map(x => x.globalId === id ? {...x, selected: !x.selected} : x));
-
-  // --- Render ---
-  if (!isEngineReady) return <div className="flex h-screen items-center justify-center bg-gray-950 text-white"><Loader2 className="animate-spin mr-2"/> Loading Engine...</div>;
-
-  return (
-    <div className="flex flex-col lg:flex-row h-screen bg-gray-900 text-gray-100 font-sans overflow-hidden">
-      
-      {/* --- MOBILE HEADER --- */}
-      <div className="lg:hidden h-16 bg-gray-950 border-b border-gray-800 flex items-center justify-between px-4 shrink-0 z-30">
-          <div className="flex items-center gap-2 font-bold text-lg">
-             <Layers className="text-blue-500"/> {APP_NAME}
-          </div>
-          <button onClick={() => setMobileMenuOpen(!mobileMenuOpen)} className="p-2 bg-gray-900 rounded border border-gray-700">
-             <Menu size={20}/>
-          </button>
-      </div>
-
-      {/* --- SIDEBAR (Controls) --- */}
-      <aside className={`
-        fixed inset-0 z-40 bg-gray-950 flex flex-col transition-transform duration-300
-        lg:relative lg:translate-x-0 lg:w-80 lg:border-r lg:border-gray-800 lg:shadow-xl
-        ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}
-      `}>
-         {/* Mobile Close Button */}
-         <div className="lg:hidden p-4 flex justify-end">
-             <button onClick={() => setMobileMenuOpen(false)}><X size={24}/></button>
-         </div>
-
-         {/* Desktop Header */}
-         <div className="hidden lg:flex p-5 border-b border-gray-800 bg-gradient-to-r from-gray-950 to-gray-900 items-center gap-2">
-            <Layers className="text-blue-500"/>
-            <h1 className="font-bold">{APP_NAME}</h1>
-         </div>
-
-         {/* Scrollable Settings */}
-         <div className="flex-1 overflow-y-auto p-5 space-y-6">
-            
-            {/* 1. Files */}
-            <div>
-                <h3 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-3 flex items-center gap-2"><FileText size={12}/> Input</h3>
-                <div className="border-2 border-dashed border-gray-800 hover:border-blue-500 rounded-xl p-4 text-center cursor-pointer transition-colors bg-gray-900/50">
-                    <input type="file" id="file-upload" multiple accept="application/pdf" className="hidden" onChange={(e) => handleFiles(e.target.files)} />
-                    <label htmlFor="file-upload" className="cursor-pointer block">
-                        <Upload className="mx-auto text-blue-500 mb-2"/>
-                        <span className="text-sm font-medium">Add PDF Files</span>
-                        <p className="text-[10px] text-gray-500 mt-1">Select multiple at once</p>
-                    </label>
-                </div>
-                <div className="mt-3 space-y-1">
-                    {files.map((f, i) => (
-                        <div key={i} className="flex justify-between text-xs bg-gray-900 p-2 rounded border border-gray-800">
-                            <span className="truncate w-48">{f.name}</span>
-                            <button onClick={() => {
-                                setFiles(prev => prev.filter((_, idx) => idx !== i));
-                                setPages(prev => prev.filter(p => p.fileIndex !== i));
-                            }} className="text-red-400 hover:text-red-300"><Trash2 size={12}/></button>
-                        </div>
-                    ))}
-                </div>
-            </div>
-
-            {/* 2. Visual Filters */}
-            <div className={`transition-opacity duration-500 ${files.length ? 'opacity-100' : 'opacity-50 pointer-events-none'}`}>
-                 <div className="flex justify-between items-center mb-3">
-                    <h3 className="text-xs font-bold text-gray-500 uppercase tracking-widest flex items-center gap-2"><Settings size={12}/> Filters</h3>
-                    <button onClick={() => setSettings(s => ({...s, invert: true, grayscale: false, brightness: 0, contrast: 0}))}><RefreshCw size={12} className="text-gray-600 hover:text-white"/></button>
-                 </div>
-                 
-                 <div className="grid grid-cols-2 gap-2 mb-4">
-                    <button onClick={() => setSettings(s => ({...s, invert: !s.invert}))} 
-                        className={`p-3 rounded border flex flex-col items-center gap-1 ${settings.invert ? 'bg-blue-900/30 border-blue-500 text-blue-300' : 'bg-gray-900 border-gray-800'}`}>
-                        <Moon size={16}/> <span className="text-[10px]">Invert</span>
-                    </button>
-                    <button onClick={() => setSettings(s => ({...s, grayscale: !s.grayscale}))} 
-                        className={`p-3 rounded border flex flex-col items-center gap-1 ${settings.grayscale ? 'bg-blue-900/30 border-blue-500 text-blue-300' : 'bg-gray-900 border-gray-800'}`}>
-                        <ImageIcon size={16}/> <span className="text-[10px]">Grayscale</span>
-                    </button>
-                 </div>
-                 
-                 <div className="space-y-3">
-                    <div>
-                        <div className="flex justify-between text-[10px] text-gray-400 uppercase"><span>Contrast</span> <span>{settings.contrast}</span></div>
-                        <input type="range" min="-100" max="100" value={settings.contrast} onChange={(e) => setSettings(s => ({...s, contrast: parseInt(e.target.value)}))} className="w-full h-1 bg-gray-800 rounded appearance-none cursor-pointer accent-blue-500"/>
-                    </div>
-                    <div>
-                         <div className="flex justify-between text-[10px] text-gray-400 uppercase"><span>Brightness</span> <span>{settings.brightness}</span></div>
-                         <input type="range" min="-100" max="100" value={settings.brightness} onChange={(e) => setSettings(s => ({...s, brightness: parseInt(e.target.value)}))} className="w-full h-1 bg-gray-800 rounded appearance-none cursor-pointer accent-blue-500"/>
-                    </div>
-                 </div>
-            </div>
-
-            {/* 3. Output Layout */}
-            <div className={`transition-opacity duration-500 ${files.length ? 'opacity-100' : 'opacity-50 pointer-events-none'}`}>
-                <h3 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-3 flex items-center gap-2"><LayoutTemplate size={12}/> Layout</h3>
-                <div className="grid grid-cols-3 gap-2">
-                    {[1, 2, 3, 4, 6, 9].map(n => (
-                        <button 
-                            key={n}
-                            onClick={() => setSettings(s => ({...s, layoutConfig: n}))}
-                            className={`py-2 text-xs font-bold rounded border ${settings.layoutConfig === n ? 'bg-blue-600 text-white border-blue-600' : 'bg-gray-900 border-gray-800 text-gray-400'}`}
-                        >
-                            {n}-Up
-                        </button>
-                    ))}
-                </div>
-                <p className="text-[10px] text-gray-500 mt-2 text-center">
-                    {settings.layoutConfig === 1 ? "Full Page Slide" : 
-                     settings.layoutConfig === 2 ? "2 Rows (Stacked)" : 
-                     settings.layoutConfig === 3 ? "3 Rows (Stacked)" :
-                     `${settings.layoutConfig} Slides Grid`}
-                </p>
-            </div>
-         </div>
-
-         {/* Export Action */}
-         <div className="p-5 border-t border-gray-800 bg-gray-950">
-             <button 
-                onClick={processAndDownload}
-                disabled={files.length === 0 || isProcessing}
-                className="w-full py-3 rounded-lg font-bold flex items-center justify-center gap-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-blue-900/20 text-white"
-             >
-                 {isProcessing ? <Loader2 className="animate-spin"/> : <Download size={18}/>}
-                 {isProcessing ? "Working..." : "Export PDF"}
-             </button>
-         </div>
-      </aside>
-
-      {/* --- MAIN AREA --- */}
-      <main className="flex-1 flex flex-col relative bg-gray-900 min-w-0">
-          
-          {/* Top Bar (View Modes) */}
-          <div className="h-14 bg-gray-900/90 backdrop-blur border-b border-gray-800 flex items-center justify-between px-4 shrink-0">
-             <div className="flex bg-gray-950 p-1 rounded-lg border border-gray-800">
-                <button onClick={() => setViewMode('single')} className={`px-3 py-1.5 rounded text-xs font-medium flex gap-2 ${viewMode === 'single' ? 'bg-gray-800 text-white shadow' : 'text-gray-400'}`}>
-                    <FileText size={14} className="hidden sm:block"/> Preview
-                </button>
-                <button onClick={() => { setViewMode('grid'); generateThumbnails(pages.slice(0, 30)); }} className={`px-3 py-1.5 rounded text-xs font-medium flex gap-2 ${viewMode === 'grid' ? 'bg-gray-800 text-white shadow' : 'text-gray-400'}`}>
-                    <Grid size={14} className="hidden sm:block"/> Grid Manager
-                </button>
-             </div>
-             <div className="text-xs text-gray-400 flex items-center gap-2">
-                 <span className="hidden sm:inline">Selected:</span> 
-                 <span className="bg-blue-900/30 text-blue-300 px-2 py-0.5 rounded border border-blue-900/50">{pages.filter(p=>p.selected).length} / {pages.length}</span>
-             </div>
-          </div>
-
-          {/* Content Viewport */}
-          <div className="flex-1 overflow-hidden relative">
-              
-              {/* VIEW: Single */}
-              {viewMode === 'single' && (
-                  <div className="w-full h-full bg-[radial-gradient(#1f2937_1px,transparent_1px)] [background-size:16px_16px] flex flex-col items-center p-4 overflow-y-auto">
-                      {pages.length > 0 ? (
-                        <>
-                           <div className="relative shadow-2xl bg-white max-w-full lg:max-w-2xl w-full">
-                               {activePreviewUrl ? (
-                                   <img src={activePreviewUrl} alt="Preview" className="w-full h-auto block" />
-                               ) : (
-                                   <div className="aspect-[1/1.4] bg-gray-800 flex items-center justify-center text-gray-500 animate-pulse">Rendering...</div>
-                               )}
-                           </div>
-                           
-                           {/* Floating Nav */}
-                           <div className="fixed bottom-6 bg-gray-900/90 backdrop-blur border border-gray-700 rounded-full px-4 py-2 flex gap-4 text-white shadow-xl z-20">
-                               <button onClick={() => setCurrentPreviewIndex(Math.max(0, currentPreviewIndex - 1))} className="hover:text-blue-400"><ChevronDown className="rotate-90"/></button>
-                               <span className="text-sm font-mono pt-0.5">{currentPreviewIndex + 1} / {pages.length}</span>
-                               <button onClick={() => setCurrentPreviewIndex(Math.min(pages.length - 1, currentPreviewIndex + 1))} className="hover:text-blue-400"><ChevronDown className="-rotate-90"/></button>
-                           </div>
-                        </>
-                      ) : (
-                          <div className="flex flex-col items-center justify-center h-full text-gray-600">
-                              <FileText size={64} className="mb-4 opacity-20"/>
-                              <p>No document loaded</p>
-                              <button onClick={() => setMobileMenuOpen(true)} className="mt-4 text-blue-500 text-sm lg:hidden">Open Menu to Upload</button>
-                          </div>
-                      )}
-                  </div>
-              )}
-
-              {/* VIEW: Grid Manager */}
-              {viewMode === 'grid' && (
-                  <div className="w-full h-full flex flex-col">
-                      {/* Grid Tools */}
-                      <div className="h-10 bg-gray-950 border-b border-gray-800 flex items-center px-4 gap-4 text-xs">
-                          <button onClick={selectAll} className="flex items-center gap-1 hover:text-white text-gray-400"><CheckSquare size={14}/> All</button>
-                          <button onClick={selectNone} className="flex items-center gap-1 hover:text-white text-gray-400"><Square size={14}/> None</button>
-                      </div>
-                      
-                      {/* Grid Scroll Area */}
-                      <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
-                         {pages.length === 0 ? <div className="text-center mt-20 text-gray-600">No slides to manage</div> : (
-                             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 pb-20">
-                                {pages.map(p => (
-                                    <div 
-                                        key={p.globalId} 
-                                        onClick={() => toggleSelect(p.globalId)}
-                                        className={`relative aspect-[1/1.3] rounded-lg border-2 cursor-pointer overflow-hidden transition-all group
-                                        ${p.selected ? "border-blue-500 bg-blue-500/10" : "border-gray-800 opacity-60 bg-gray-900"}
-                                        `}
-                                    >
-                                        {/* Thumbnail Image */}
-                                        {p.thumbnail ? (
-                                            <img src={p.thumbnail} className="w-full h-full object-contain bg-gray-800" alt="slide"/>
-                                        ) : (
-                                            <div className="w-full h-full flex items-center justify-center text-[10px] text-gray-600">Loading...</div>
-                                        )}
-                                        
-                                        {/* Checkbox Overlay */}
-                                        <div className={`absolute top-2 right-2 w-5 h-5 rounded-full flex items-center justify-center border shadow-sm transition-colors ${p.selected ? 'bg-blue-500 border-blue-500 text-white' : 'bg-gray-900/80 border-gray-500'}`}>
-                                            {p.selected && <CheckCircle size={12}/>}
-                                        </div>
-                                        
-                                        {/* Page Number */}
-                                        <div className="absolute bottom-1 right-2 text-[10px] bg-black/50 px-1.5 rounded text-gray-300">
-                                            {p.pageIndex}
-                                        </div>
-                                    </div>
-                                ))}
-                             </div>
-                         )}
-                      </div>
-                      {/* Load More Trigger (Invisible) - Could implement infinite scroll here */}
-                  </div>
-              )}
-
-              {/* Processing Overlay */}
-              {isProcessing && (
-                  <div className="absolute inset-0 z-50 bg-gray-900/90 backdrop-blur flex items-center justify-center p-6">
-                      <div className="w-full max-w-sm bg-gray-950 border border-gray-800 rounded-2xl p-6 text-center shadow-2xl">
-                          <Loader2 className="w-10 h-10 text-blue-500 animate-spin mx-auto mb-4"/>
-                          <h3 className="text-lg font-bold text-white">Processing PDF</h3>
-                          <p className="text-sm text-gray-400 mb-6">Optimizing layout and applying filters...</p>
-                          <div className="h-2 bg-gray-900 rounded-full overflow-hidden">
-                              <div className="h-full bg-blue-500 transition-all duration-300" style={{width: `${processingProgress}%`}}/>
-                          </div>
-                          <p className="text-xs text-right mt-2 text-blue-400 font-mono">{processingProgress}%</p>
-                      </div>
-                  </div>
-              )}
-          </div>
-      </main>
-
-      <style>{`
-        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 4px; }
-      `}</style>
-    </div>
-  );
-}
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<SynapseLearnMobile />);
+    </script>
+</body>
+</html>
