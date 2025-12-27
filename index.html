@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>SynapseLearn Mobile</title>
     
     <!-- Tailwind CSS -->
@@ -24,6 +24,12 @@
         
         body { background-color: #111827; }
         .a4-ratio { aspect-ratio: 1 / 1.414; }
+        
+        /* Mobile Scroll Fixes */
+        .touch-scroll {
+            -webkit-overflow-scrolling: touch;
+            overscroll-behavior-y: contain;
+        }
     </style>
 </head>
 <body>
@@ -50,7 +56,7 @@
         const Loader2 = (p) => <Icon {...p} className={`animate-spin ${p.className || ''}`}><path d="M21 12a9 9 0 1 1-6.21-8.85"/></Icon>;
         const Grid = (p) => <Icon {...p}><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></Icon>;
         const Layers = (p) => <Icon {...p}><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></Icon>;
-        const Trash2 = (p) => <Icon {...p}><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2-2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></Icon>;
+        const Trash2 = (p) => <Icon {...p}><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></Icon>;
         const LayoutTemplate = (p) => <Icon {...p}><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></Icon>;
         const Menu = (p) => <Icon {...p}><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></Icon>;
         const CheckSquare = (p) => <Icon {...p}><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></Icon>;
@@ -104,16 +110,12 @@
         };
 
         // --- OPTIMIZED IMAGE PROCESSOR ---
-        // This function draws an image to a context with filters applied.
-        // It uses fast GPU filters for standard ops, and falls back to CPU for background removal.
         const drawProcessedImage = (ctx, imageSource, x, y, w, h, config) => {
             const { invert, grayscale, brightness, contrast, removeBackground, threshold } = config;
-
-            // Save context state
             ctx.save();
 
             if (!removeBackground) {
-                // FAST PATH: Use Native Canvas Filters (GPU Accelerated)
+                // FAST PATH: GPU Accelerated Filters
                 let filterStr = "";
                 if (invert) filterStr += "invert(100%) ";
                 if (grayscale) filterStr += "grayscale(100%) ";
@@ -123,8 +125,7 @@
                 ctx.filter = filterStr.trim() || "none";
                 ctx.drawImage(imageSource, x, y, w, h);
             } else {
-                // SLOW PATH: Manual Pixel Manipulation (CPU)
-                // 1. Draw raw image to a temp canvas to get data
+                // SLOW PATH: CPU Pixel Manipulation
                 const tmpCanvas = document.createElement('canvas');
                 tmpCanvas.width = w;
                 tmpCanvas.height = h;
@@ -133,40 +134,28 @@
                 
                 const imageData = tmpCtx.getImageData(0, 0, w, h);
                 const data = imageData.data;
-                
                 const safeContrast = Math.max(-100, Math.min(100, contrast));
                 const contrastFactor = (259 * (safeContrast + 255)) / (255 * (259 - safeContrast));
 
                 for (let i = 0; i < data.length; i += 4) {
                     let r = data[i], g = data[i + 1], b = data[i + 2];
-
                     if (invert) { r = 255 - r; g = 255 - g; b = 255 - b; }
                     if (grayscale) { const avg = 0.3 * r + 0.59 * g + 0.11 * b; r = avg; g = avg; b = avg; }
-                    
                     if (safeContrast !== 0) {
                         r = contrastFactor * (r - 128) + 128;
                         g = contrastFactor * (g - 128) + 128;
                         b = contrastFactor * (b - 128) + 128;
                     }
                     if (brightness !== 0) { r += brightness; g += brightness; b += brightness; }
-                    
-                    // Background Removal Logic
-                    if (r > threshold && g > threshold && b > threshold) { 
-                        r = 255; g = 255; b = 255; 
-                    }
-
+                    if (r > threshold && g > threshold && b > threshold) { r = 255; g = 255; b = 255; }
                     data[i] = Math.max(0, Math.min(255, r));
                     data[i+1] = Math.max(0, Math.min(255, g));
                     data[i+2] = Math.max(0, Math.min(255, b));
                 }
-                
-                // Put processed data onto the target context
                 ctx.putImageData(imageData, x, y);
             }
-            
             ctx.restore();
         };
-
 
         const generateUniqueId = () => Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
 
@@ -182,16 +171,11 @@
                         observer.disconnect();
                     }
                 }, { rootMargin: '100px' });
-                
                 if (cardRef.current) observer.observe(cardRef.current);
                 return () => observer.disconnect();
             }, []);
 
             useEffect(() => {
-                // If visible and no thumbnail OR if settings changed (force regen needed?)
-                // Actually, for fast filters, we can regen quickly.
-                // But here we rely on the parent logic or just render raw.
-                // For simplicity, we trigger gen if thumbnail is missing.
                 if (isVisible && !page.thumbnail) {
                     onGenerateThumb(page);
                 }
@@ -249,41 +233,45 @@
                 }
             }, [pdfJsStatus, jsPdfStatus]);
 
-            // --- SINGLE THUMBNAIL GENERATOR (Using Optimized Draw) ---
+            // Prevent Reload/Close if files exist
+            useEffect(() => {
+                const handleBeforeUnload = (e) => {
+                    if (files.length > 0) {
+                        e.preventDefault();
+                        e.returnValue = 'You have unsaved changes. Are you sure you want to leave?';
+                        return 'You have unsaved changes. Are you sure you want to leave?';
+                    }
+                };
+                window.addEventListener('beforeunload', handleBeforeUnload);
+                return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+            }, [files]);
+
+            // --- THUMBNAIL GENERATOR (High Quality) ---
             const generateSingleThumbnail = useCallback(async (pageData) => {
                 try {
                     const page = await pageData.pdfDoc.getPage(pageData.pageIndex);
-                    const viewport = page.getViewport({ scale: 0.25 }); // Low res
+                    // Increased scale for better preview quality in grid (0.6 vs 0.25)
+                    const viewport = page.getViewport({ scale: 0.6 });
                     
-                    // Offscreen canvas for raw PDF render
                     const rawCanvas = document.createElement("canvas");
                     rawCanvas.width = viewport.width;
                     rawCanvas.height = viewport.height;
                     const rawCtx = rawCanvas.getContext("2d");
                     await page.render({ canvasContext: rawCtx, viewport }).promise;
 
-                    // Target canvas for filtered output
                     const targetCanvas = document.createElement("canvas");
                     targetCanvas.width = viewport.width;
                     targetCanvas.height = viewport.height;
                     const targetCtx = targetCanvas.getContext("2d");
-                    
-                    // Fill background
                     targetCtx.fillStyle = "#FFFFFF";
                     targetCtx.fillRect(0, 0, targetCanvas.width, targetCanvas.height);
 
-                    // Apply filters/processing
                     drawProcessedImage(targetCtx, rawCanvas, 0, 0, viewport.width, viewport.height, settings);
                     
                     const thumbUrl = targetCanvas.toDataURL();
-                    
-                    setPages(prev => prev.map(p => 
-                        p.globalId === pageData.globalId ? { ...p, thumbnail: thumbUrl } : p
-                    ));
-                } catch (e) {
-                    console.warn("Thumbnail Gen Error:", e);
-                }
-            }, [settings]); // Re-create when settings change
+                    setPages(prev => prev.map(p => p.globalId === pageData.globalId ? { ...p, thumbnail: thumbUrl } : p));
+                } catch (e) { console.warn("Thumb Gen Error:", e); }
+            }, [settings]);
 
             const handleFiles = async (newFileList) => {
                 if (!newFileList || newFileList.length === 0) return;
@@ -308,7 +296,6 @@
                 setFiles(updatedFiles);
 
                 let newPagesList = [...pages];
-                
                 for (const fileData of processedNewFiles) {
                     try {
                         const arrayBuffer = await fileData.fileObject.arrayBuffer();
@@ -324,16 +311,12 @@
                                 thumbnail: null
                             });
                         }
-                    } catch (err) {
-                        console.error(err);
-                        setErrorMsg(`Failed to load ${fileData.name}`);
-                    }
+                    } catch (err) { console.error(err); setErrorMsg(`Failed to load ${fileData.name}`); }
                 }
                 setPages(newPagesList);
                 setIsProcessing(false);
             };
 
-            // Clear thumbs on settings change to force regen with new filters
             useEffect(() => {
                 if (pages.length > 0) {
                     setPages(prev => prev.map(p => ({...p, thumbnail: null})));
@@ -352,8 +335,6 @@
                 newFiles[index] = newFiles[index + direction];
                 newFiles[index + direction] = temp;
                 setFiles(newFiles);
-
-                // Reorder pages based on new file order
                 const newFileOrderIds = newFiles.map(f => f.id);
                 setPages(prevPages => {
                     const groupedPages = prevPages.reduce((acc, p) => {
@@ -367,7 +348,6 @@
 
             // --- LAYOUT-AWARE PREVIEW RENDERER ---
             const [activePreviewUrl, setActivePreviewUrl] = useState(null);
-            
             const selectedPages = useMemo(() => pages.filter(p => p.selected), [pages]);
             const layoutMap = {
                 1: { cols: 1, rows: 1 }, 2: { cols: 1, rows: 2 }, 3: { cols: 1, rows: 3 },
@@ -377,30 +357,18 @@
             const slidesPerPage = currentLayout.cols * currentLayout.rows;
             const totalSheets = Math.ceil(selectedPages.length / slidesPerPage) || 1;
 
-            // Effect to render the current "Sheet"
             useEffect(() => {
                 const renderSheet = async () => {
                     if (pages.length === 0) return;
-                    
                     const canvas = document.createElement("canvas");
-                    const A4_W = 595; 
-                    const A4_H = 842; 
-                    const SCALE = 1.0; // Moderate quality for preview to stay responsive
-                    
-                    canvas.width = A4_W * SCALE;
-                    canvas.height = A4_H * SCALE;
-                    
+                    const A4_W = 595; const A4_H = 842; const SCALE = 1.0;
+                    canvas.width = A4_W * SCALE; canvas.height = A4_H * SCALE;
                     const ctx = canvas.getContext("2d");
-                    ctx.fillStyle = "#FFFFFF";
-                    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
+                    ctx.fillStyle = "#FFFFFF"; ctx.fillRect(0, 0, canvas.width, canvas.height);
                     const startIdx = currentSheetIndex * slidesPerPage;
                     const sheetPages = selectedPages.slice(startIdx, startIdx + slidesPerPage);
 
-                    if (sheetPages.length === 0) {
-                        setActivePreviewUrl(null);
-                        return;
-                    }
+                    if (sheetPages.length === 0) { setActivePreviewUrl(null); return; }
 
                     const cellW = canvas.width / currentLayout.cols;
                     const cellH = canvas.height / currentLayout.rows;
@@ -410,43 +378,26 @@
                         try {
                             const page = await p.pdfDoc.getPage(p.pageIndex);
                             const viewport = page.getViewport({ scale: 1.0 });
-                            
-                            // Render PDF to temp canvas
                             const tmpCanvas = document.createElement("canvas");
-                            tmpCanvas.width = viewport.width;
-                            tmpCanvas.height = viewport.height;
+                            tmpCanvas.width = viewport.width; tmpCanvas.height = viewport.height;
                             const tmpCtx = tmpCanvas.getContext("2d");
                             await page.render({ canvasContext: tmpCtx, viewport }).promise;
-
-                            // Calculate position
                             const col = i % currentLayout.cols;
                             const row = Math.floor(i / currentLayout.cols);
-                            const xBase = col * cellW;
-                            const yBase = row * cellH;
-
-                            // Fit logic
+                            const xBase = col * cellW; const yBase = row * cellH;
                             const ratio = Math.min(cellW / tmpCanvas.width, cellH / tmpCanvas.height) * 0.95;
-                            const finalW = tmpCanvas.width * ratio;
-                            const finalH = tmpCanvas.height * ratio;
-                            const xOffset = xBase + (cellW - finalW) / 2;
-                            const yOffset = yBase + (cellH - finalH) / 2;
-
-                            // Use Optimized Draw
+                            const finalW = tmpCanvas.width * ratio; const finalH = tmpCanvas.height * ratio;
+                            const xOffset = xBase + (cellW - finalW) / 2; const yOffset = yBase + (cellH - finalH) / 2;
                             drawProcessedImage(ctx, tmpCanvas, xOffset, yOffset, finalW, finalH, settings);
-
-                        } catch (e) { console.error("Preview render error", e); }
+                        } catch (e) { console.error(e); }
                     }
-
                     setActivePreviewUrl(canvas.toDataURL("image/jpeg", 0.7));
                 };
-
-                const timeout = setTimeout(renderSheet, 200); // 200ms debounce
+                const timeout = setTimeout(renderSheet, 200);
                 return () => clearTimeout(timeout);
-
             }, [currentSheetIndex, selectedPages, settings, pages]);
 
-
-            // --- EXPORT LOGIC ---
+            // --- EXPORT LOGIC (Highest Quality) ---
             const processAndDownload = async () => {
                 setIsProcessing(true);
                 setProcessingProgress(0);
@@ -462,7 +413,6 @@
                     const doc = new jsPDF('p', 'pt', 'a4');
                     const docW = doc.internal.pageSize.getWidth();
                     const docH = doc.internal.pageSize.getHeight();
-                    
                     const cellW = docW / currentLayout.cols;
                     const cellH = docH / currentLayout.rows;
 
@@ -472,27 +422,24 @@
                         
                         const p = selectedPages[i];
                         const page = await p.pdfDoc.getPage(p.pageIndex);
-                        const viewport = page.getViewport({ scale: 1.5 }); // Higher quality for export
+                        // HIGHEST QUALITY SETTING: Scale 2.5
+                        const viewport = page.getViewport({ scale: 2.5 }); 
                         
-                        // Raw PDF Render
                         const rawCanvas = document.createElement("canvas");
                         rawCanvas.width = viewport.width;
                         rawCanvas.height = viewport.height;
                         const rawCtx = rawCanvas.getContext("2d");
                         await page.render({ canvasContext: rawCtx, viewport }).promise;
 
-                        // Target Canvas (Processed)
                         const finalCanvas = document.createElement("canvas");
                         finalCanvas.width = viewport.width;
                         finalCanvas.height = viewport.height;
                         const finalCtx = finalCanvas.getContext("2d");
                         
-                        // Apply filters
                         drawProcessedImage(finalCtx, rawCanvas, 0, 0, viewport.width, viewport.height, settings);
                         
-                        const imgData = finalCanvas.toDataURL("image/jpeg", 0.85);
+                        const imgData = finalCanvas.toDataURL("image/jpeg", 0.9); // High quality JPEG
                         
-                        // Geometry
                         const indexOnPage = i % slidesPerPage;
                         const col = indexOnPage % currentLayout.cols;
                         const row = Math.floor(indexOnPage / currentLayout.cols);
@@ -506,7 +453,8 @@
                         const yOffset = yBase + (cellH - finalH) / 2;
                         
                         doc.addImage(imgData, 'JPEG', xOffset, yOffset, finalW, finalH);
-                        await new Promise(r => setTimeout(r, 0));
+                        // Short yield to prevent blocking UI during heavy generation
+                        await new Promise(r => setTimeout(r, 10));
                     }
                     setProcessingProgress(100);
                     const safeName = outputFileName.replace(/[^a-z0-9]/gi, '_').substring(0, 30) || "SynapseExport";
@@ -527,7 +475,7 @@
 
             if (!isEngineReady) {
                 return (
-                    <div className="flex h-screen w-full items-center justify-center bg-gray-950 text-white flex-col gap-4">
+                    <div className="flex h-[100dvh] w-full items-center justify-center bg-gray-950 text-white flex-col gap-4">
                         <Loader2 size={40} className="text-blue-500" />
                         <div className="text-center"><h2 className="font-bold text-xl">SynapseLearn</h2><p className="text-gray-500 text-sm">Initializing...</p></div>
                     </div>
@@ -535,7 +483,7 @@
             }
 
             return (
-                <div className="flex flex-col lg:flex-row h-screen bg-gray-900 text-gray-100 font-sans overflow-hidden">
+                <div className="flex flex-col lg:flex-row h-[100dvh] bg-gray-900 text-gray-100 font-sans overflow-hidden">
                     {/* Header Mobile */}
                     <div className="lg:hidden h-16 bg-gray-950 border-b border-gray-800 flex items-center justify-between px-4 shrink-0 z-30">
                         <div className="flex items-center gap-2 font-bold text-lg text-white"><Layers className="text-blue-500" /> {APP_NAME}</div>
@@ -547,7 +495,7 @@
                         <div className="lg:hidden p-4 flex justify-end border-b border-gray-800"><button onClick={() => setMobileMenuOpen(false)} className="text-gray-400"><X size={24} /></button></div>
                         <div className="hidden lg:flex p-5 border-b border-gray-800 bg-gradient-to-r from-gray-950 to-gray-900 items-center gap-2"><Layers className="text-blue-500" /><h1 className="font-bold text-white">{APP_NAME}</h1></div>
                         
-                        <div className="flex-1 overflow-y-auto p-5 space-y-8">
+                        <div className="flex-1 overflow-y-auto p-5 space-y-8 touch-scroll">
                             <div>
                                 <h3 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-3 flex items-center gap-2"><FileText size={12} /> Source Files</h3>
                                 <div className="border-2 border-dashed border-gray-800 hover:border-blue-500 rounded-xl p-6 text-center cursor-pointer bg-gray-900/50 group relative">
@@ -626,11 +574,10 @@
                             {errorMsg && <div className="absolute top-4 right-4 z-50 bg-red-500/10 border border-red-500/50 text-red-200 px-4 py-3 rounded-lg flex items-center gap-3 shadow-lg backdrop-blur"><AlertCircle size={18}/><span className="text-sm">{errorMsg}</span><button onClick={() => setErrorMsg(null)}><X size={14}/></button></div>}
 
                             {viewMode === 'single' && (
-                                <div className="w-full h-full bg-[radial-gradient(#1f2937_1px,transparent_1px)] [background-size:16px_16px] flex flex-col items-center p-4 overflow-y-auto">
+                                <div className="w-full h-full bg-[radial-gradient(#1f2937_1px,transparent_1px)] [background-size:16px_16px] flex flex-col items-center p-4 overflow-y-auto touch-scroll">
                                     {pages.length > 0 ? (
                                         <>
                                         <div className="relative shadow-2xl bg-white max-w-full lg:max-w-2xl w-full border-4 border-gray-800 rounded-sm">
-                                            {/* Preview Canvas */}
                                             {activePreviewUrl ? (
                                                 <img src={activePreviewUrl} alt="Preview" className="w-full h-auto block" />
                                             ) : (
@@ -659,9 +606,9 @@
                                         <div className="h-4 w-px bg-gray-800"></div>
                                         <button onClick={selectNone} className="flex items-center gap-1.5 hover:text-white text-gray-400"><Square size={16}/> Select None</button>
                                     </div>
-                                    <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
+                                    <div className="flex-1 overflow-y-auto p-4 custom-scrollbar touch-scroll">
                                         {pages.length === 0 ? <div className="flex items-center justify-center h-full text-gray-600">No slides</div> : (
-                                            <div className="space-y-8 pb-24">
+                                            <div className="space-y-8 pb-32">
                                                 {files.map(file => {
                                                     const filePages = pages.filter(p => p.fileId === file.id);
                                                     if (filePages.length === 0) return null;
